@@ -1,7 +1,7 @@
 [project]
 name = "automaton-auditor"
 version = "0.1.0"
-description = "Add your description here"
+description = "Week 2 Automaton Auditor: forensic detective swarm (repo + doc) with LangGraph, uv-managed deps and .env for API keys."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

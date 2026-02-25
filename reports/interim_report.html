@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Interim Submission — Automaton Auditor</title>
+  <style>
+    body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.5; color: #1a1a1a; }
+    h1 { font-size: 1.75rem; border-bottom: 2px solid #333; padding-bottom: 0.5rem; }
+    h2 { font-size: 1.25rem; margin-top: 2rem; color: #333; }
+    h3 { font-size: 1.05rem; margin-top: 1.25rem; }
+    pre, code { background: #f4f4f4; padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.9em; }
+    pre { padding: 1rem; overflow-x: auto; }
+    .diagram { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 1.5rem; margin: 1rem 0; font-family: monospace; white-space: pre; font-size: 0.85rem; line-height: 1.4; }
+    .diagram .edge-label { color: #0d6efd; }
+    .diagram .cond-label { color: #856404; }
+    .legend { font-size: 0.8rem; margin-top: 0.75rem; padding: 0.5rem 0; border-top: 1px solid #dee2e6; color: #495057; }
+    ul { margin: 0.5rem 0; }
+    .note { background: #fff3cd; border-left: 4px solid #ffc107; padding: 0.75rem 1rem; margin: 1rem 0; }
+  </style>
+</head>
+<body>
+  <h1>Interim Submission: The Automaton Auditor</h1>
+  <p><strong>Week 2 — Detective layer and partial StateGraph.</strong> This report covers architecture decisions, known gaps, and the planned flow for the judicial layer and synthesis engine.</p>
+
+  <h2>1. Architecture decisions</h2>
+
+  <h3>1.1 Why Pydantic over dicts</h3>
+  <ul>
+    <li><strong>Typed state and outputs:</strong> AgentState, Evidence, and JudicialOpinion are defined with Pydantic (BaseModel) or TypedDict so that parallel nodes cannot overwrite each other’s data by mistake. Reducers (<code>operator.add</code> for lists, <code>operator.ior</code> for dicts) are applied to annotated state keys, so detective outputs merge instead of replace.</li>
+    <li><strong>Structured evidence:</strong> Evidence is a Pydantic model with goal, found, location, rationale, confidence, and optional content. This gives the Judges and Chief Justice a consistent, parseable structure and avoids freeform text as the only output.</li>
+    <li><strong>Judicial opinions (planned):</strong> JudicialOpinion will be enforced via <code>.with_structured_output()</code> bound to the same Pydantic schema, so we avoid “Hallucination Liability” (rubric: Judges must not return freeform text).</li>
+  </ul>
+
+  <h3>1.2 How AST parsing was structured</h3>
+  <ul>
+    <li><strong>No regex for structure:</strong> Repo forensic checks use Python’s <code>ast</code> module to parse <code>src/graph.py</code> and <code>src/state.py</code>. We walk the AST to detect <code>StateGraph</code>, <code>add_edge</code>, <code>add_conditional_edges</code>, <code>add_node</code>, and class bases (BaseModel, TypedDict).</li>
+    <li><strong>Graph orchestration:</strong> <code>analyze_graph_structure()</code> collects all <code>add_edge</code> and <code>add_conditional_edges</code> calls, infers fan-out (multiple edges from the same source), and looks for a synchronization node by name (e.g. “aggregator”, “sync”, “collect”).</li>
+    <li><strong>State and reducers:</strong> <code>analyze_state_management()</code> finds classes Evidence, JudicialOpinion, AgentState and checks for <code>operator.add</code> / <code>operator.ior</code> in Annotated type hints.</li>
+    <li><strong>Sandbox check:</strong> <code>check_sandboxed_tools()</code> scans <code>src/tools/</code> for <code>tempfile</code>/<code>TemporaryDirectory</code>, <code>subprocess</code>, and flags raw <code>os.system</code>.</li>
+  </ul>
+
+  <h3>1.3 Sandboxing strategy</h3>
+  <ul>
+    <li><strong>Clone in temp dir:</strong> <code>clone_repo(repo_url, target_dir)</code> is designed to be called with <code>tempfile.TemporaryDirectory()</code> as <code>target_dir</code>. The node runs <code>with tempfile.TemporaryDirectory() as tmp: clone_path = clone_repo(repo_url, tmp)</code> so the clone lives only inside the context and is removed on exit.</li>
+    <li><strong>No os.system:</strong> Git is invoked via <code>subprocess.run()</code> with <code>capture_output=True</code>, timeout, and return code checks. Repo URL is validated with a strict HTTPS GitHub pattern before clone.</li>
+    <li><strong>Error handling:</strong> Clone failures (e.g. auth, network) raise; the RepoInvestigator node catches and returns a single Evidence with <code>found=False</code> and the error message.</li>
+  </ul>
+
+  <h2>2. Known gaps and plan for judicial layer and synthesis engine</h2>
+
+  <h3>2.1 Current gaps</h3>
+  <ul>
+    <li><strong>Judges not implemented:</strong> Prosecutor, Defense, and Tech Lead nodes are not yet added; no dialectical opinions or criterion-by-criterion scores.</li>
+    <li><strong>ChiefJusticeNode missing:</strong> No synthesis engine, conflict-resolution rules, or Markdown report generation.</li>
+    <li><strong>VisionInspector missing:</strong> No image extraction from PDF or vision-model analysis (optional for execution per spec).</li>
+    <li><strong>Structured output for Judges:</strong> When added, Judges must use <code>.with_structured_output(JudicialOpinion)</code> and retry on parse failure.</li>
+  </ul>
+
+  <h3>2.2 Concrete plan</h3>
+  <ul>
+    <li><strong>Judicial layer:</strong> Add <code>src/nodes/judges.py</code> with three nodes (Prosecutor, Defense, Tech Lead). Each receives the aggregated evidence and rubric dimensions; each returns a list of JudicialOpinion (one per criterion) via an LLM bound to <code>JudicialOpinion</code>. Run all three in parallel (fan-out) from EvidenceAggregator, then fan-in to ChiefJustice.</li>
+    <li><strong>Synthesis engine:</strong> Add <code>src/nodes/justice.py</code> with ChiefJusticeNode. Implement hardcoded rules: (1) Security override — Prosecutor-confirmed security flaw caps score at 3. (2) Fact supremacy — Defense claims overruled if Detective evidence contradicts. (3) Functionality weight — Tech Lead’s view weighted highest for “Graph Orchestration”. (4) If score variance &gt; 2, require dissent summary and optional re-evaluation. Output: build <code>AuditReport</code> (Pydantic) and serialize to Markdown (Executive Summary → Criterion Breakdown → Remediation Plan).</li>
+    <li><strong>Graph wiring:</strong> After EvidenceAggregator, add conditional edge to fan-out to the three Judges; add a second aggregator (or single “judge_aggregator”) node that collects opinions; then edge to ChiefJusticeNode → END. Persist final report to <code>audit/</code> as Markdown.</li>
+  </ul>
+
+  <h2>3. Planned StateGraph flow (detective fan-out / fan-in)</h2>
+
+  <p>Interim implementation (current), with state types and data labels on edges:</p>
+  <div class="diagram">  INPUT: AgentState { repo_url, pdf_path, rubric_dimensions, evidences={}, opinions=[] }
+
+                    ┌─────────────────────┐
+                    │       START         │
+                    └─────────┬───────────┘
+                              │ AgentState (pass-through)
+              ┌───────────────┼───────────────┐
+              ▼               ▼               │
+   ┌──────────────────┐  ┌──────────────────┐
+   │ RepoInvestigator │  │   DocAnalyst     │   ← parallel fan-out
+   └────────┬─────────┘  └────────┬─────────┘
+            │                      │
+            │ evidences:           │ evidences:
+            │ {"repo_investigator": │ {"doc_analyst":
+            │  List[Evidence]}     │  List[Evidence]}
+            └──────────┬───────────┘
+                       │ AgentState (evidences merged via operator.ior)
+                       ▼
+            ┌──────────────────────┐
+            │ EvidenceAggregator   │   ← fan-in (sync point)
+            └──────────┬───────────┘
+                       │ AgentState (unchanged; ready for Judges)
+                       ▼
+                      END
+  </div>
+  <p class="legend"><strong>State on edges:</strong> All edges carry full <code>AgentState</code>; detectives return only <code>evidences</code> (reducer <code>operator.ior</code> merges by source key).</p>
+
+  <p><strong>Conditional edges and error handling (interim / planned):</strong></p>
+  <div class="diagram">  NORMAL PATH:
+    START ──► RepoInvestigator ──► EvidenceAggregator ──► END
+    START ──► DocAnalyst       ──►
+
+  CONDITIONAL / ERROR PATHS (planned for final):
+    RepoInvestigator ──► [clone/parse error] ──► return evidences: [{ found: false, rationale: "Error: ..." }]
+                                                         (still flows to EvidenceAggregator; no branch to END)
+    DocAnalyst        ──► [PDF missing/fail]  ──► return evidences: [{ found: false }]
+
+    EvidenceAggregator ──► [if any critical evidence missing] ──► optional: retry node or flag in state
+                         [else] ──► END (interim) or fan-out to Judges (final)
+  </div>
+  <p class="legend">Error handling is node-internal: detectives catch exceptions and emit Evidence with <code>found=False</code>; conditional edges from EvidenceAggregator (e.g. “Evidence Missing” / “Node Failure”) will route to retry or a dedicated handler in the final graph.</p>
+
+  <p>Planned full flow (final submission), with state types and data labels:</p>
+  <div class="diagram">  INPUT: AgentState { repo_url, pdf_path, rubric_dimensions, evidences={}, opinions=[] }
+
+                    ┌─────────────────────┐
+                    │       START         │
+                    └─────────┬───────────┘
+                              │ AgentState
+              ┌───────────────┼───────────────┬───────────────┐
+              ▼               ▼               ▼               │
+   ┌──────────────────┐ ┌──────────────┐ ┌──────────────────┐
+   │ RepoInvestigator │ │  DocAnalyst  │ │ VisionInspector  │   ← Detectives fan-out
+   └────────┬─────────┘ └──────┬──────┘ └────────┬─────────┘
+            │ evidences        │ evidences      │ evidences
+            └──────────────────┼────────────────┘
+                               │ AgentState (evidences merged, operator.ior)
+                               ▼
+                    ┌────────────────────────┐
+                    │   EvidenceAggregator   │   ← fan-in
+                    └────────────┬───────────┘
+                                 │ AgentState (full evidences)
+                                 │
+              ┌──────────────────┼──────────────────┐
+              ▼                  ▼                   ▼
+   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+   │ Prosecutor   │   │   Defense     │   │  Tech Lead   │   ← Judges fan-out
+   └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
+          │ opinions         │ opinions         │ opinions
+          │ List[JudicialOpinion] (add per judge, operator.add)
+          └──────────────────┼──────────────────┘
+                             │ AgentState (evidences + opinions)
+                             ▼
+                ┌────────────────────────┐
+                │   ChiefJusticeNode     │   ← synthesis
+                └────────────┬───────────┘
+                             │ final_report: AuditReport
+                             ▼
+                            END
+                             │
+                             ▼
+                Output: Markdown Audit Report (file)
+  </div>
+  <p class="legend"><strong>State types on edges:</strong> <code>evidences: Dict[str, List[Evidence]]</code> (reducer <code>operator.ior</code>); <code>opinions: List[JudicialOpinion]</code> (reducer <code>operator.add</code>); <code>final_report: AuditReport</code> (single write). Conditional edges from EvidenceAggregator (e.g. “all evidence present” → Judges, “evidence missing” → retry/flag) and from ChiefJustice (variance &gt; 2 → re-evaluation) are implemented in code; diagram above shows the main data flow.</p>
+
+
+</body>
+</html>

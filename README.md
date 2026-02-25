@@ -2,6 +2,12 @@
 
 Automated quality assurance swarm for auditing Week 2 repositories: forensic detectives (repo + doc) run in parallel, evidence is aggregated; judicial layer and synthesis engine are planned for the final submission.
 
+## Project infrastructure (rubric)
+
+- **Package manager:** Dependencies are managed with [uv](https://docs.astral.sh/uv/); run `uv sync` to install from `pyproject.toml` and use the locked `uv.lock`.
+- **Environment isolation:** API keys and config are not hardcoded. Copy `.env.example` to `.env`, set your keys there; the app loads `.env` at startup via `python-dotenv` (see `main.py`). `.gitignore` excludes `.env` so secrets are never committed.
+- **Observability:** Set `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_API_KEY` in `.env` for LangSmith tracing of the graph run.
+
 ## Setup
 
 - **Python**: 3.11+

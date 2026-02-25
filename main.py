@@ -4,9 +4,13 @@ Usage: uv run python main.py --repo-url <url> [--pdf-path <path>]
 """
 
 import argparse
-import json
+
+from dotenv import load_dotenv
 
 from src.graph import build_graph, get_initial_state
+
+# Load .env so API keys (OPENAI, LANGCHAIN) are never hardcoded (rubric: project infrastructure)
+load_dotenv()
 
 
 def main():
