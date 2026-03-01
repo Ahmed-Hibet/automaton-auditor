@@ -131,3 +131,47 @@ def extract_file_paths_from_text(text: str) -> list[str]:
     for m in pattern.finditer(text):
         found.add(m.group(0))
     return sorted(found)
+
+
+def extract_images_from_pdf(pdf_path: str) -> dict[str, Any]:
+    """
+    Extract images from PDF pages for VisionInspector (diagram analysis).
+    Returns { "ok": bool, "images": [{"page": int, "path": str}], "count": int, "error": optional }.
+    Uses pypdf page.images when available. Vision analysis is optional per challenge.
+    """
+    if PdfReader is None:
+        return {"ok": False, "images": [], "count": 0, "error": "pypdf not installed"}
+    path = Path(pdf_path)
+    if not path.exists():
+        return {"ok": False, "images": [], "count": 0, "error": f"File not found: {pdf_path}"}
+    images: list[dict[str, Any]] = []
+    import tempfile
+    try:
+        reader = PdfReader(str(path))
+        for page_num, page in enumerate(reader.pages):
+            try:
+                # pypdf: page.images is iterable (image_file_object with .image and .name)
+                if not hasattr(page, "images"):
+                    continue
+                # page.images: dict-like (name -> image_file_object) or iterable
+                seq = page.images.values() if hasattr(page.images, "values") else page.images
+                for img_obj in seq:
+                    try:
+                        if hasattr(img_obj, "image") and hasattr(img_obj.image, "save"):
+                            fd, out_path = tempfile.mkstemp(suffix=".png")
+                            import os
+                            os.close(fd)
+                            img_obj.image.save(out_path)
+                            images.append({"page": page_num + 1, "path": out_path})
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+        return {
+            "ok": True,
+            "images": images,
+            "count": len(images),
+            "error": None,
+        }
+    except Exception as e:
+        return {"ok": False, "images": [], "count": 0, "error": str(e)}

@@ -263,6 +263,7 @@ def analyze_state_management(repo_path: str) -> dict[str, Any]:
                 has_operator_add = True
             if node.attr == "ior":
                 has_operator_ior = True
+    has_reducers = has_operator_add and has_operator_ior
     return {
         "found": True,
         "path": str(state_file),
@@ -270,7 +271,7 @@ def analyze_state_management(repo_path: str) -> dict[str, Any]:
         "has_typed_dict": has_typed_dict,
         "has_evidence": has_evidence,
         "has_judicial_opinion": has_judicial,
-        "has_reducers": has_operator_add and has_operator_ior,
+        "has_reducers": has_reducers,
         "code_snippet": text[:2500] if len(text) > 2500 else text,
         "error": None,
     }

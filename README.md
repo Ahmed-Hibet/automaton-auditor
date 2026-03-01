@@ -1,25 +1,23 @@
-# Automaton Auditor — Week 2 Interim
+# Automaton Auditor — Week 2 (Full)
 
-Automated quality assurance swarm for auditing Week 2 repositories: forensic detectives (repo + doc) run in parallel, evidence is aggregated; judicial layer and synthesis engine are planned for the final submission.
+Automated quality assurance swarm for auditing Week 2 repositories: **Detectives** (Repo, Doc, Vision) collect evidence in parallel → **EvidenceAggregator** (fan-in) → **Judicial Panel** (Prosecutor, Defense, Tech Lead) → **Chief Justice** synthesizes a final Audit Report (Markdown).
 
 ## Project infrastructure (rubric)
 
-- **Package manager:** Dependencies are managed with [uv](https://docs.astral.sh/uv/); run `uv sync` to install from `pyproject.toml` and use the locked `uv.lock`.
-- **Environment isolation:** API keys and config are not hardcoded. Copy `.env.example` to `.env`, set your keys there; the app loads `.env` at startup via `python-dotenv` (see `main.py`). `.gitignore` excludes `.env` so secrets are never committed.
-- **Observability:** Set `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_API_KEY` in `.env` for LangSmith tracing of the graph run.
+- **Package manager:** [uv](https://docs.astral.sh/uv/). Run `uv sync` to install from `pyproject.toml` and use the locked `uv.lock`.
+- **Environment:** API keys are not hardcoded. Copy `.env.example` to `.env` and set your keys; the app loads `.env` via `python-dotenv`.
+- **Observability:** Set `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_API_KEY` in `.env` for LangSmith tracing.
 
 ## Setup
 
-- **Python**: 3.11+
-- **Package manager**: [uv](https://docs.astral.sh/uv/)
+- **Python:** 3.11+
+- **Package manager:** [uv](https://docs.astral.sh/uv/)
 
 ### Install dependencies
 
 ```bash
 uv sync
 ```
-
-This installs from `pyproject.toml` and uses the locked `uv.lock` (managed via uv).
 
 ### Environment variables
 
@@ -31,20 +29,24 @@ cp .env.example .env
 
 Required:
 
-- `OPENAI_API_KEY` — used when Judges are added (optional for interim detective-only run)
-- `LANGCHAIN_API_KEY` — for LangSmith tracing
-- `LANGCHAIN_TRACING_V2=true` — enable tracing
-- `LANGCHAIN_PROJECT=automaton-auditor` — LangSmith project name
+| Variable | Purpose |
+|----------|---------|
+| `OPENAI_API_KEY` | Used by the Judicial Panel (Prosecutor, Defense, Tech Lead). Required for full audit. |
+| `LANGCHAIN_API_KEY` | LangSmith tracing |
+| `LANGCHAIN_TRACING_V2` | Set to `true` to enable tracing |
+| `LANGCHAIN_PROJECT` | e.g. `automaton-auditor` |
 
-## Run the detective graph
+## How to run
 
-Interim graph: **RepoInvestigator** and **DocAnalyst** run in parallel (fan-out), then **EvidenceAggregator** (fan-in). No judges yet.
+### Full swarm (detectives + judges + chief justice → Markdown report)
 
 ```bash
 uv run python main.py --repo-url "https://github.com/owner/repo" --pdf-path "path/to/report.pdf"
 ```
 
-If `--pdf-path` is omitted, only repo-based evidence is collected (DocAnalyst will return minimal evidence).
+- **`--repo-url`** (required): GitHub repository URL to audit.
+- **`--pdf-path`** (optional): Path to the PDF report. If omitted, DocAnalyst and VisionInspector return minimal evidence.
+- **`--output`** (optional): Path where the Markdown report is written. Default: `audit/report_<repo_slug>.md`.
 
 Example (audit this repo and a local PDF):
 
@@ -52,20 +54,47 @@ Example (audit this repo and a local PDF):
 uv run python main.py --repo-url "https://github.com/your-org/automaton-auditor" --pdf-path "reports/interim_report.pdf"
 ```
 
-Output: state with `evidences` populated by `repo_investigator` and `doc_analyst`; you can print or persist this for inspection.
+Example with custom output path:
 
-## Repository layout (interim)
+```bash
+uv run python main.py --repo-url "https://github.com/owner/repo" --pdf-path "reports/final_report.pdf" --output "audit/report_onself_generated/audit.md"
+```
 
-- `src/state.py` — Pydantic/TypedDict state (Evidence, JudicialOpinion, AgentState) with reducers (`operator.add`, `operator.ior`)
-- `src/tools/repo_tools.py` — Sandboxed git clone (tempfile), git log, AST-based graph/state/sandbox analysis
-- `src/tools/doc_tools.py` — PDF ingestion and chunked querying (RAG-lite)
-- `src/nodes/detectives.py` — RepoInvestigator and DocAnalyst nodes outputting structured Evidence
-- `src/graph.py` — StateGraph: detectives in parallel + EvidenceAggregator (fan-out/fan-in)
-- `config/rubric.json` — Rubric dimensions and synthesis rules (constitution)
-- `pyproject.toml` / `uv.lock` — Dependencies managed via uv
-- `.env.example` — Required env vars (no secrets)
-- `reports/interim_report.html` — Interim report (convert to PDF as needed)
+If `OPENAI_API_KEY` is not set, the judicial panel is skipped and no `final_report` is produced; only evidence is collected.
+
+### Detective-only (no judges, no report)
+
+To run only the detective layer (RepoInvestigator, DocAnalyst, VisionInspector) and print evidence:
+
+```bash
+uv run python main.py --repo-url "https://github.com/owner/repo" --pdf-path "path/to/report.pdf" --detective-only
+```
+
+## Repository layout
+
+| Path | Description |
+|------|-------------|
+| `src/state.py` | Pydantic/TypedDict state (Evidence, JudicialOpinion, CriterionResult, AuditReport, AgentState) with reducers |
+| `src/tools/repo_tools.py` | Sandboxed git clone, git log, AST-based graph/state/sandbox analysis |
+| `src/tools/doc_tools.py` | PDF ingestion, chunked querying (RAG-lite), image extraction for VisionInspector |
+| `src/nodes/detectives.py` | RepoInvestigator, DocAnalyst, VisionInspector, EvidenceAggregator |
+| `src/nodes/judges.py` | Judicial panel (Prosecutor, Defense, Tech Lead) with structured output |
+| `src/nodes/justice.py` | Chief Justice synthesis and `audit_report_to_markdown()` |
+| `src/graph.py` | Full StateGraph: detectives (parallel) → EvidenceAggregator → Judicial Panel → Chief Justice |
+| `config/rubric.json` | Rubric dimensions and synthesis rules |
+| `pyproject.toml` / `uv.lock` | Dependencies (uv) |
+| `.env.example` | Required env vars (no secrets) |
+| `audit/` | Output directory for generated Markdown reports |
+
+## Audit report folders (deliverables)
+
+- **`audit/report_onself_generated/`** — Report from running your agent against your own repo.
+- **`audit/report_onpeer_generated/`** — Report from running your agent against a peer’s repo.
+- **`audit/report_bypeer_received/`** — Report produced by a peer’s agent when auditing your repo.
+
+Generate reports into these by using `--output audit/report_onself_generated/audit.md` (and similarly for the others).
 
 ## Reports
 
-- **Interim**: `reports/interim_report.html` — Architecture decisions, known gaps, and planned StateGraph flow. Convert to PDF for submission if required.
+- **Interim:** `reports/interim_report.html` (convert to PDF if required).
+- **Final:** Place your final PDF in `reports/final_report.pdf` so peers’ agents can access it.

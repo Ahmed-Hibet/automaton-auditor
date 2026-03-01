@@ -16,7 +16,12 @@ from src.tools.repo_tools import (
     analyze_state_management,
     check_sandboxed_tools,
 )
-from src.tools.doc_tools import ingest_pdf, query_pdf_chunks, extract_file_paths_from_text
+from src.tools.doc_tools import (
+    ingest_pdf,
+    query_pdf_chunks,
+    extract_file_paths_from_text,
+    extract_images_from_pdf,
+)
 
 
 def _repo_dimensions(state: AgentState) -> list[dict]:
@@ -229,6 +234,76 @@ def doc_analyst_node(state: AgentState) -> dict[str, Any]:
         )
 
     return {"evidences": {"doc_analyst": evidences}}
+
+
+def vision_inspector_node(state: AgentState) -> dict[str, Any]:
+    """
+    VisionInspector (Diagram Detective): extract images from PDF, optionally run
+    vision model. Per challenge: implementation required, execution optional.
+    Returns Evidence for swarm_visual dimension; if no images or no vision API, returns
+    minimal evidence (e.g. "no images extracted" or "vision analysis skipped").
+    """
+    pdf_path = state.get("pdf_path") or ""
+    dimensions = state.get("rubric_dimensions") or []
+    pdf_image_dims = [d for d in dimensions if d.get("target_artifact") == "pdf_images"]
+    evidences: list[Evidence] = []
+
+    if not pdf_path:
+        evidences.append(
+            _evidence(
+                goal="swarm_visual",
+                found=False,
+                location="",
+                rationale="No pdf_path provided; VisionInspector skipped.",
+                confidence=0.0,
+            )
+        )
+        return {"evidences": {"vision_inspector": evidences}}
+
+    result = extract_images_from_pdf(pdf_path)
+    if not result.get("ok"):
+        evidences.append(
+            _evidence(
+                goal="Architectural Diagram Analysis",
+                found=False,
+                location=pdf_path,
+                rationale=result.get("error", "Image extraction failed"),
+                confidence=0.0,
+            )
+        )
+        return {"evidences": {"vision_inspector": evidences}}
+
+    count = result.get("count", 0)
+    if count == 0:
+        evidences.append(
+            _evidence(
+                goal="Architectural Diagram Analysis",
+                found=False,
+                location=pdf_path,
+                rationale="No images extracted from PDF (optional vision execution not run).",
+                confidence=0.5,
+            )
+        )
+    else:
+        evidences.append(
+            _evidence(
+                goal="Architectural Diagram Analysis",
+                found=True,
+                location=pdf_path,
+                rationale=f"Extracted {count} image(s) from PDF. Vision model analysis is optional per rubric; diagram classification can be run with Gemini/GPT-4o if configured.",
+                confidence=0.7,
+                content=json.dumps([{"page": im.get("page")} for im in result.get("images", [])]),
+            )
+        )
+    # Clean up temp image files if paths were returned
+    for im in result.get("images", []):
+        p = im.get("path")
+        if p and isinstance(p, str):
+            try:
+                Path(p).unlink(missing_ok=True)
+            except Exception:
+                pass
+    return {"evidences": {"vision_inspector": evidences}}
 
 
 def evidence_aggregator_node(state: AgentState) -> dict[str, Any]:
