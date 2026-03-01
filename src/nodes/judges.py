@@ -1,7 +1,10 @@
 """
-Judicial layer: Prosecutor, Defense, Tech Lead as distinct personas.
-Each returns structured JudicialOpinion per rubric criterion via .with_structured_output().
-Run as a single judicial_panel node that invokes all three in parallel (asyncio).
+Judicial layer: Prosecutor, Defense, Tech Lead as explicit parallel judge nodes.
+Each judge node invokes one persona and returns JudicialOpinion per rubric criterion.
+Fan-out: evidence_aggregator -> prosecutor, defense, tech_lead (parallel).
+Fan-in: all three -> judge_aggregator -> conditional (chief_justice | judicial_fallback).
+Error paths: conditional after evidence_aggregator (missing evidence -> skip_judges);
+conditional after judge_aggregator (malformed judge state -> judicial_fallback).
 """
 
 import json
@@ -147,36 +150,146 @@ def _invoke_judge(
     return opinions
 
 
-def judicial_panel_node(state: AgentState) -> dict[str, Any]:
-    """
-    Run Prosecutor, Defense, and Tech Lead in sequence (to avoid rate limits and ensure
-    deterministic order). Each judge gets the same evidence and returns structured
-    JudicialOpinion per criterion. Opinions are merged via state reducer (operator.add).
-    """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return {
-            "opinions": [
-                JudicialOpinion(
-                    judge="Prosecutor",
-                    criterion_id=d.get("id", ""),
-                    score=3,
-                    argument="OPENAI_API_KEY not set; judicial panel skipped.",
-                    cited_evidence=[],
-                )
-                for d in (state.get("rubric_dimensions") or [])
-            ]
-        }
+def prosecutor_node(state: AgentState) -> dict[str, Any]:
+    """Single judge node: Prosecutor. Returns opinions for this judge only; state reducer merges."""
+    return _single_judge_node(state, "Prosecutor", PROSECUTOR_SYSTEM)
+
+
+def defense_node(state: AgentState) -> dict[str, Any]:
+    """Single judge node: Defense. Returns opinions for this judge only; state reducer merges."""
+    return _single_judge_node(state, "Defense", DEFENSE_SYSTEM)
+
+
+def tech_lead_node(state: AgentState) -> dict[str, Any]:
+    """Single judge node: Tech Lead. Returns opinions for this judge only; state reducer merges."""
+    return _single_judge_node(state, "TechLead", TECH_LEAD_SYSTEM)
+
+
+def _single_judge_node(
+    state: AgentState, judge_name: str, system_prompt: str
+) -> dict[str, Any]:
+    """Invoke one judge; return its opinions. No internal handling of missing API key—caller routes via conditional edges."""
     dimensions = state.get("rubric_dimensions") or []
     if not dimensions:
         return {"opinions": []}
     evidence_summary = _evidence_summary_for_judges(state)
-    all_opinions: list[JudicialOpinion] = []
-    for name, system in [
-        ("Prosecutor", PROSECUTOR_SYSTEM),
-        ("Defense", DEFENSE_SYSTEM),
-        ("TechLead", TECH_LEAD_SYSTEM),
-    ]:
-        judge_opinions = _invoke_judge(name, system, evidence_summary, dimensions)
-        all_opinions.extend(judge_opinions)
-    return {"opinions": all_opinions}
+    opinions = _invoke_judge(judge_name, system_prompt, evidence_summary, dimensions)
+    return {"opinions": opinions}
+
+
+def judge_aggregator_node(state: AgentState) -> dict[str, Any]:
+    """
+    Fan-in node after parallel judges. No state mutation; used so conditional edge
+    can run on aggregated opinions (valid vs malformed judge state).
+    """
+    return {}
+
+
+def skip_judges_node(state: AgentState) -> dict[str, Any]:
+    """
+    Error path: missing evidence, missing rubric, or missing API key. Set default opinions
+    so chief_justice can still produce a report; set judicial_skip_reason for summary.
+    """
+    dimensions = state.get("rubric_dimensions") or []
+    if not os.environ.get("OPENAI_API_KEY"):
+        reason = "OPENAI_API_KEY not set; judicial panel skipped (conditional edge)."
+    else:
+        reason = "Missing evidence or rubric; judicial panel skipped (conditional edge)."
+    default_opinions = [
+        JudicialOpinion(
+            judge="Prosecutor",
+            criterion_id=d.get("id", ""),
+            score=3,
+            argument=reason,
+            cited_evidence=[],
+        )
+        for d in dimensions
+    ] if dimensions else []
+    return {
+        "opinions": default_opinions,
+        "judicial_skip_reason": reason,
+    }
+
+
+def judicial_fallback_node(state: AgentState) -> dict[str, Any]:
+    """
+    Error path: malformed judge state (e.g. missing judge, wrong opinion count).
+    Ensures chief_justice has something to synthesize and records reason in state.
+    """
+    dimensions = state.get("rubric_dimensions") or []
+    existing = list(state.get("opinions") or [])
+    # Ensure at least one opinion per dimension so chief_justice can build criteria
+    dim_ids = {d.get("id") for d in dimensions}
+    by_criterion: dict[str, list] = {}
+    for op in existing:
+        by_criterion.setdefault(op.criterion_id, []).append(op)
+    fallback_opinions: list[JudicialOpinion] = []
+    for d in dimensions:
+        dim_id = d.get("id", "")
+        ops = by_criterion.get(dim_id, [])
+        if len(ops) < 3:  # expect Prosecutor, Defense, TechLead
+            fallback_opinions.append(
+                JudicialOpinion(
+                    judge="TechLead",
+                    criterion_id=dim_id,
+                    score=3,
+                    argument="Malformed judge state (missing or inconsistent opinions); default applied.",
+                    cited_evidence=[],
+                )
+            )
+    return {
+        "opinions": fallback_opinions,
+        "judicial_skip_reason": "Malformed judge state; fallback opinions applied (conditional edge).",
+    }
+
+
+# ---------- Conditional edge routers (used by graph) ----------
+
+
+def route_after_evidence_aggregator(state: AgentState) -> list[str]:
+    """
+    Conditional edge: after evidence_aggregator. If evidence/rubric sufficient
+    and API key present, fan-out to parallel judges; else go to skip_judges (error path).
+    Returns list of next node names for LangGraph add_conditional_edges.
+    """
+    if not os.environ.get("OPENAI_API_KEY"):
+        return ["skip_judges"]
+    evidences = state.get("evidences") or {}
+    dimensions = state.get("rubric_dimensions") or []
+    has_evidence = bool(evidences) and any(
+        isinstance(v, list) and len(v) > 0 for v in evidences.values()
+    )
+    has_rubric = len(dimensions) > 0
+    if has_evidence and has_rubric:
+        return ["prosecutor", "defense", "tech_lead"]
+    return ["skip_judges"]
+
+
+def route_after_judge_aggregator(state: AgentState) -> list[str]:
+    """
+    Conditional edge: after judge_aggregator. If judge state is valid (three judges,
+    one opinion per dimension per judge), go to chief_justice; else judicial_fallback.
+    Returns list of one node name.
+    """
+    opinions = list(state.get("opinions") or [])
+    dimensions = state.get("rubric_dimensions") or []
+    dim_ids = [d.get("id") for d in dimensions if d.get("id")]
+    if not dim_ids:
+        return ["judicial_fallback"]
+    expected_per_judge = len(dim_ids)
+    judge_names = {"Prosecutor", "Defense", "TechLead"}
+    by_judge: dict[str, list] = {j: [] for j in judge_names}
+    for op in opinions:
+        if op.judge in by_judge:
+            by_judge[op.judge].append(op)
+    # Valid: each judge has exactly expected_per_judge opinions, and criterion_ids match
+    valid = all(len(by_judge[j]) == expected_per_judge for j in judge_names)
+    if valid:
+        for j in judge_names:
+            ids = {o.criterion_id for o in by_judge[j]}
+            if ids != set(dim_ids):
+                valid = False
+                break
+    if valid:
+        return ["chief_justice"]
+    return ["judicial_fallback"]

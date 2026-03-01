@@ -10,6 +10,10 @@ This report documents the **final implementation** of the Automaton Auditor: a h
 
 Deliverables are in place: typed state with reducers, sandboxed repo tools with AST-based analysis, PDF ingestion and image extraction, three judge personas with `.with_structured_output(JudicialOpinion)`, Chief Justice synthesis with Rule of Security, Fact Supremacy, and Functionality weight, and end-to-end graph from repo URL + PDF to written report. Remaining gaps (e.g. conditional edges for “Evidence Missing”, optional vision-model analysis of diagrams) are documented with a remediation plan.
 
+**Overall self-audit aggregate score:** The peer's agent (see `audit/report_bypeer_received/audit_report_ahmed.md`) audited this repository and produced an **overall score of 2.70/5**, with a security-related cap at 3. This serves as our primary external assessment.
+
+**Most impactful findings from the peer feedback loop:** (1) **Safe Tool Engineering (2/5)** — The peer's Prosecutor and Tech Lead reported insufficient evidence of sandboxing and flagged possible use of `os.system`; this triggered the security cap and is the highest-impact finding. (2) **Structured Output Enforcement (1/5)** — The peer's agent did not find `src/nodes/judges.py` in the cloned repo (path or clone-scope issue), leading to the lowest criterion score. (3) **Judicial Nuance (2/5)** and **Chief Justice Synthesis** — The peer noted insufficient evidence of distinct judge personas and deterministic synthesis rules. These outcomes directly informed our remediation plan (prioritized below) and our reflection on how to improve both this repo and our auditor's detection of the same issues in others.
+
 ---
 
 ## 2. Architecture Deep Dive
@@ -130,6 +134,8 @@ INPUT: AgentState { repo_url, pdf_path, rubric_dimensions, evidences={}, opinion
 
 ## 4. Criterion-by-Criterion Self-Audit (Implementation vs. Rubric)
 
+### 4.1 Implementation and self-assessment
+
 | Criterion | Implementation | Self-assessment |
 |-----------|----------------|-----------------|
 | **Git Forensic Analysis** | `repo_tools.extract_git_history()` runs `git log --oneline --reverse --format=%h %s %ci`; RepoInvestigator checks commit count and progression keywords. | Meets: git log extracted; progression story checked. |
@@ -143,25 +149,55 @@ INPUT: AgentState { repo_url, pdf_path, rubric_dimensions, evidences={}, opinion
 | **Report Accuracy** | `extract_file_paths_from_text()` pulls paths from PDF; evidence lists them for cross-check with RepoInvestigator. No automatic “verified vs hallucinated” list in report yet. | Partial: path extraction and evidence; cross-ref could be explicit in report. |
 | **Swarm Visual (Diagram)** | VisionInspector: `extract_images_from_pdf()` in doc_tools; node returns Evidence for diagram dimension. Optional vision model not wired; implementation present, execution optional per rubric. | Meets: image extraction implemented; vision analysis optional. |
 
+### 4.2 Dialectical tension: judge opinions and conflicts (from peer audit of this repository)
+
+The following shows how each of the three judge personas (Prosecutor, Defense, Tech Lead) assessed this repository when audited by the peer's agent (`audit/report_bypeer_received/audit_report_ahmed.md`). Disagreements and dissent are explicit.
+
+| Criterion | Prosecutor | Defense | Tech Lead | Final | Conflict / dissent |
+|-----------|------------|---------|-----------|-------|---------------------|
+| **Git Forensic Analysis** | 3/5 — "Lack of evidence regarding meaningful commit messages." | 4/5 — "Six distinct commits, clear progression; atomic sequence aligns with success pattern." | 5/5 — "Structured commit history; clear progression." | 3/5 | Defense and Tech Lead reward progression; Prosecutor withholds for message quality. |
+| **State Management Rigor** | 4/5 — "TypedDict AgentState with Pydantic; reducers present." | 4/5 — "Pydantic and TypedDict; thoughtful engineering." | 5/5 — "Best practices; Pydantic, TypedDicts, reducers." | 3/5 | All positive; Tech Lead strongest. |
+| **Graph Orchestration** | 2/5 — "Insufficient evidence for synchronization nodes." | 4/5 — "StateGraph with multiple edges; more sync evidence would help." | 3/5 — "Basic fan-out/fan-in; limited edges; improve error handling." | 3/5 | Prosecutor 2 vs Defense 4; Tech Lead tie-break (3). Dissent on sync visibility. |
+| **Safe Tool Engineering** | 1/5 — "No sandboxing; raw os.system; security concerns." | 2/5 — "Lacked sandboxing; os.system concerning." | 2/5 — "No temp dir; raw os.system; recommend subprocess." | 2/5 | All critical; security cap. Highest-impact finding. |
+| **Structured Output Enforcement** | 1/5 — "judges.py missing in cloned repo." | 2/5 — "Absence of judges.py; intent exists logically." | 1/5 — "No evidence; judges file missing." | 1/5 | Agreement on missing evidence. Lowest score. |
+| **Judicial Nuance** | 1/5 — "No evidence; lacks persona separation." | 3/5 — "Distinct judges; prompt design speculative." | 2/5 — "Insufficient evidence for distinct personas." | 2/5 | Prosecutor/Tech Lead demand evidence; Defense partial credit. |
+| **Chief Justice Synthesis** | 1/5 — "No detected deterministic rules." | 3/5 — "Deterministic logic implied; further proof would help." | 3/5 — "Partial deterministic rules; stricter rules would help." | 3/5 | Prosecutor sees no rules; Defense/Tech Lead partial. |
+| **Theoretical Depth** | 2/5 — "Terms insufficiently integrated; superficial." | 4/5 — "Significant terms in meaningful contexts." | 4/5 — "Terminology with context; deeper integration would help." | 4/5 | Prosecutor flags keyword-dropping; Defense/Tech Lead reward substance. |
+| **Report Accuracy** | 2/5 — "Absence of verifying path existence; hallucination risk." | 4/5 — "Claims generally align with repo." | 4/5 — "Cross-reference shows alignment." | 4/5 | Prosecutor demands verification; others accept alignment. |
+| **Swarm Visual** | 1/5 — "Inadequate evidence for parallelism visualization." | 2/5 — "Absence of visual diagrams hampers." | 2/5 — "Absence of diagrams reduces clarity." | 2/5 | Agreement that diagram evidence is missing. |
+
 ---
 
 ## 5. Reflection on the MinMax Feedback Loop
 
-- **What a peer’s agent might catch:** (1) Missing conditional edges for “Evidence Missing” or “Node Failure” (graph always proceeds to judges). (2) Judicial panel runs three LLM calls in sequence, not as three separate graph nodes, so the “Judges fan-out” is conceptual rather than explicit in the graph. (3) Report Accuracy dimension could output an explicit “Verified vs. Hallucinated paths” section. (4) Vision model (e.g. GPT-4o/Gemini) not invoked for diagram classification.
+### 5.1 Findings from our audit of the peer's repository
 
-- **How we could update the agent after peer feedback:** (1) Add conditional edge from EvidenceAggregator: if critical evidence is missing (e.g. repo clone failed), route to a “retry” or “fail_gracefully” node instead of judicial panel. (2) Optionally split judicial_panel into three graph nodes (Prosecutor, Defense, TechLead) with edges into a “judge_aggregator” so the rubric’s “Judges in parallel” is visible in the graph. (3) In Chief Justice or DocAnalyst, add a step that compares paths mentioned in the PDF to RepoInvestigator’s file list and writes “Verified paths” / “Hallucinated paths” into the report. (4) In VisionInspector, call a vision API on extracted images when available and add diagram-classification evidence.
+When our agent audited our assigned peer's repository (Ahmed-Hibet/automaton-auditor), the **detective layer executed successfully**: the repo was cloned, `git log` and AST-based checks (graph structure, state management, sandboxing) ran, and PDF ingestion and path extraction ran where a report was provided. The **judicial panel** could not complete due to API quota limits (429) during that run, so the reported scores were fallback defaults (3/5 per criterion). In a successful run, our agent would have produced: (1) criterion-by-criterion scores with distinct Prosecutor, Defense, and Tech Lead opinions and cited evidence; (2) dissent summaries where score variance exceeded 2; (3) remediation per dimension tied to rubric success/failure patterns; (4) Safe Tool Engineering and Structured Output evidence (e.g. presence of `src/nodes/judges.py`, use of `tempfile`/`subprocess` vs `os.system`). The peer's repo was cloneable and our pipeline produced a structured Markdown report, demonstrating that our auditor runs end-to-end on an external target. We would re-run the audit with sufficient API quota to surface real dialectical tension and peer-specific findings to complete the MinMax loop.
+
+### 5.2 What a peer's agent caught in our work
+
+- **What a peer's agent might catch:** (1) Missing conditional edges for "Evidence Missing" or "Node Failure" (graph always proceeds to judges). (2) Judicial panel runs three LLM calls in sequence, not as three separate graph nodes, so the "Judges fan-out" is conceptual rather than explicit in the graph. (3) Report Accuracy dimension could output an explicit "Verified vs. Hallucinated paths" section. (4) Vision model (e.g. GPT-4o/Gemini) not invoked for diagram classification. (5) **As observed in peer audit:** Safe Tool Engineering (2/5) and security cap; Structured Output (1/5) due to judges.py not found; Judicial Nuance (2/5) and Chief Justice evidence gaps.
+
+### 5.3 How we could update the agent after peer feedback
+
+- **How we could update the agent after peer feedback:** (1) Add conditional edge from EvidenceAggregator: if critical evidence is missing (e.g. repo clone failed), route to a "retry" or "fail_gracefully" node instead of judicial panel. (2) Optionally split judicial_panel into three graph nodes (Prosecutor, Defense, TechLead) with edges into a "judge_aggregator" so the rubric's "Judges in parallel" is visible in the graph. (3) In Chief Justice or DocAnalyst, add a step that compares paths mentioned in the PDF to RepoInvestigator's file list and writes "Verified paths" / "Hallucinated paths" into the report. (4) In VisionInspector, call a vision API on extracted images when available and add diagram-classification evidence. (5) Ensure our repo structure and clone depth make `src/nodes/judges.py` discoverable by peer agents.
+
 
 ---
 
 ## 6. Remediation Plan for Remaining Gaps
 
-| Gap | Remediation |
-|-----|-------------|
-| No conditional edges for clone/PDF failure | Add a router after EvidenceAggregator: if `evidences` lacks repo_investigator success or critical keys, route to a “partial_report” or “error_report” node instead of judicial_panel; still produce a minimal AuditReport. |
-| Judges implemented as one node | Optionally refactor to three nodes (prosecutor_node, defense_node, tech_lead_node) with edges to a single “judge_sync” node; keep using `operator.add` for opinions so Chief Justice sees all three. |
-| Report Accuracy: no explicit verified/hallucinated list | In DocAnalyst or in a small post-step, intersect `extract_file_paths_from_text(pdf_text)` with file paths discovered by RepoInvestigator (e.g. from AST/path listing); write two lists into Evidence or into the final report section. |
-| VisionInspector does not call vision model | Add optional branch in vision_inspector_node: if images exist and OPENAI_API_KEY (or VISION_API_KEY) is set, call GPT-4o or Gemini with image input and a prompt for “StateGraph diagram vs. linear pipeline”; append result to Evidence. |
-| Remediation plan section repetitive when all criteria share same text | In `audit_report_to_markdown()`, deduplicate or summarize remediation bullets per criterion before concatenating into the report’s Remediation Plan section. |
+Remediation items are **prioritized by impact and dependency**: P1 (blocking/security and highest peer-impact) first, then P2 (core rubric visibility), then P3 (quality and report clarity). Each item is **linked to the rubric dimension** it addresses.
+
+| Priority | Rubric dimension(s) | Gap | Remediation |
+|----------|---------------------|-----|-------------|
+| **P1** | **Safe Tool Engineering** | Peer audit reported insufficient sandboxing evidence and possible `os.system`; security cap applied. | Ensure `src/tools/repo_tools.py` is scanned correctly; document sandboxing in README; strengthen AST evidence so forensic tools detect tempfile/subprocess reliably. |
+| **P1** | **Structured Output Enforcement** | Peer's agent did not find `src/nodes/judges.py` (score 1/5). | Verify repo layout and clone depth so `src/nodes/judges.py` is present; ensure RepoInvestigator scans `src/nodes/`; add explicit evidence for `.with_structured_output(JudicialOpinion)`. |
+| **P2** | **Graph Orchestration** | No conditional edges for clone/PDF failure. | Add router after EvidenceAggregator: if evidences lack repo_investigator success, route to partial_report or error_report node; still produce minimal AuditReport. |
+| **P2** | **Judicial Nuance**, **Chief Justice Synthesis** | Judges as one node; peer noted insufficient evidence of personas and deterministic rules. | Refactor to three graph nodes (prosecutor, defense, tech_lead) with judge_sync; document Chief Justice rules in code/config for forensic detection. |
+| **P3** | **Report Accuracy** | No explicit verified/hallucinated path list. | Intersect paths from PDF with RepoInvestigator file list; write Verified paths and Hallucinated paths into report. |
+| **P3** | **Swarm Visual** | VisionInspector does not call vision model. | Add optional vision API call when images exist and API key set; append diagram-classification to Evidence. |
+| **P3** | Report quality | Remediation section repetitive. | In `audit_report_to_markdown()`, deduplicate or summarize remediation bullets per criterion. |
 
 ---
 
@@ -169,4 +205,3 @@ INPUT: AgentState { repo_url, pdf_path, rubric_dimensions, evidences={}, opinion
 
 - **Source:** `src/state.py`, `src/tools/repo_tools.py`, `src/tools/doc_tools.py`, `src/nodes/detectives.py`, `src/nodes/judges.py`, `src/nodes/justice.py`, `src/graph.py`, `main.py`, `config/rubric.json`, `pyproject.toml`, `.env.example`, `README.md`, optional `Dockerfile`.
 - **Audit reports:** `audit/report_onself_generated/`, `audit/report_onpeer_generated/`, `audit/report_bypeer_received/` (run with `--output` to populate).
-- **Final report:** This document (`reports/final_report.md`); can be converted to PDF for submission.

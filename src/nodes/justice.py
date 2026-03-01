@@ -128,13 +128,18 @@ def chief_justice_node(state: AgentState) -> dict[str, Any]:
     """
     Synthesis engine: deterministic resolution of judge opinions into AuditReport.
     Output is stored in state.final_report and can be serialized to Markdown.
+    If judicial_skip_reason is set (error-path routing), it is included in the executive summary.
     """
     repo_url = state.get("repo_url") or ""
+    skip_reason = state.get("judicial_skip_reason")
     criteria = _build_criterion_results(state)
     if not criteria:
+        summary = "No rubric dimensions or opinions available."
+        if skip_reason:
+            summary = f"{skip_reason} {summary}"
         report = AuditReport(
             repo_url=repo_url,
-            executive_summary="No rubric dimensions or opinions available.",
+            executive_summary=summary,
             overall_score=0.0,
             criteria=[],
             remediation_plan="Run the full graph with rubric and judges.",
@@ -146,6 +151,8 @@ def chief_justice_node(state: AgentState) -> dict[str, Any]:
         f"Audit of {repo_url}. Overall score: {overall:.1f}/5.",
         f"Criteria assessed: {len(criteria)}.",
     ]
+    if skip_reason:
+        summary_parts.insert(0, f"[Note: {skip_reason}]")
     remediation_parts = [c.remediation for c in criteria if c.remediation]
     report = AuditReport(
         repo_url=repo_url,

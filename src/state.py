@@ -1,6 +1,6 @@
 import operator
 from typing import Annotated, Dict, List, Literal, Optional
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 from pydantic import BaseModel, Field
 
 
@@ -71,3 +71,6 @@ class AgentState(TypedDict):
     ]
 
     final_report: Optional[AuditReport]
+
+    # Set by error-path nodes for conditional routing / reporting
+    judicial_skip_reason: NotRequired[Optional[str]]

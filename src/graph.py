@@ -1,8 +1,9 @@
 """
-Full StateGraph: Detectives (parallel) -> EvidenceAggregator -> Judicial Panel -> Chief Justice -> END.
-Fan-out: RepoInvestigator, DocAnalyst, VisionInspector run in parallel.
-Fan-in: EvidenceAggregator collects evidence, then Judicial Panel (Prosecutor, Defense, Tech Lead)
-runs, then Chief Justice synthesizes the final AuditReport.
+Full StateGraph: Detectives (parallel) -> EvidenceAggregator -> [conditional] -> Judges (parallel) -> JudgeAggregator -> [conditional] -> Chief Justice -> END.
+- Detective fan-out: RepoInvestigator, DocAnalyst, VisionInspector run in parallel; fan-in to EvidenceAggregator.
+- Conditional after EvidenceAggregator: missing evidence / no rubric -> skip_judges; else fan-out to Prosecutor, Defense, TechLead.
+- Judicial fan-in: all three judges -> judge_aggregator; conditional: malformed judge state -> judicial_fallback, else chief_justice.
+- Error paths: skip_judges and judicial_fallback both rejoin at chief_justice for a single report.
 """
 
 import json
@@ -17,7 +18,16 @@ from src.nodes.detectives import (
     vision_inspector_node,
     evidence_aggregator_node,
 )
-from src.nodes.judges import judicial_panel_node
+from src.nodes.judges import (
+    prosecutor_node,
+    defense_node,
+    tech_lead_node,
+    judge_aggregator_node,
+    skip_judges_node,
+    judicial_fallback_node,
+    route_after_evidence_aggregator,
+    route_after_judge_aggregator,
+)
 from src.nodes.justice import chief_justice_node
 
 
@@ -45,25 +55,47 @@ def build_graph():
     builder.add_node("doc_analyst", doc_analyst_node)
     builder.add_node("vision_inspector", vision_inspector_node)
     builder.add_node("evidence_aggregator", evidence_aggregator_node)
-    # Layer 2: Judicial
-    builder.add_node("judicial_panel", judicial_panel_node)
+    # Layer 2: Judicial — explicit parallel judge nodes + fan-in + error paths
+    builder.add_node("prosecutor", prosecutor_node)
+    builder.add_node("defense", defense_node)
+    builder.add_node("tech_lead", tech_lead_node)
+    builder.add_node("judge_aggregator", judge_aggregator_node)
+    builder.add_node("skip_judges", skip_judges_node)
+    builder.add_node("judicial_fallback", judicial_fallback_node)
     # Layer 3: Synthesis
     builder.add_node("chief_justice", chief_justice_node)
 
-    # Fan-out: run all three detectives in parallel from START
+    # Detective fan-out from START
     builder.add_conditional_edges(
         START,
         lambda _: ["repo_investigator", "doc_analyst", "vision_inspector"],
     )
 
-    # Fan-in: all detectives feed into EvidenceAggregator
+    # Detective fan-in: all detectives -> evidence_aggregator
     builder.add_edge("repo_investigator", "evidence_aggregator")
     builder.add_edge("doc_analyst", "evidence_aggregator")
     builder.add_edge("vision_inspector", "evidence_aggregator")
 
-    # EvidenceAggregator -> Judicial Panel -> Chief Justice -> END
-    builder.add_edge("evidence_aggregator", "judicial_panel")
-    builder.add_edge("judicial_panel", "chief_justice")
+    # Conditional: after evidence_aggregator — missing evidence -> skip_judges; else fan-out to judges
+    builder.add_conditional_edges(
+        "evidence_aggregator",
+        route_after_evidence_aggregator,
+    )
+
+    # Judicial fan-in: all three judges -> judge_aggregator
+    builder.add_edge("prosecutor", "judge_aggregator")
+    builder.add_edge("defense", "judge_aggregator")
+    builder.add_edge("tech_lead", "judge_aggregator")
+
+    # Conditional: after judge_aggregator — malformed judge state -> judicial_fallback; else chief_justice
+    builder.add_conditional_edges(
+        "judge_aggregator",
+        route_after_judge_aggregator,
+    )
+
+    # Error paths rejoin at chief_justice
+    builder.add_edge("skip_judges", "chief_justice")
+    builder.add_edge("judicial_fallback", "chief_justice")
     builder.add_edge("chief_justice", END)
 
     return builder.compile()
